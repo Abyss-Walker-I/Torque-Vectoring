@@ -1,0 +1,18 @@
+// physics_engine.h
+
+#ifndef PHYSICS_ENGINE_H
+#define PHYSICS_ENGINE_H
+
+#include "physics_structs.h"
+
+// 차량 제원을 합리적인 기본값으로 초기화합니다.
+void physics_init_parameters(CarParameters* params);
+
+// 차량 상태를 0 (정지 상태)으로 초기화합니다.
+void physics_init_state(CarState* state);
+
+// 물리 계산의 핵심. 
+// dt(시간 변화량)만큼 차량의 상태를 업데이트합니다.
+void physics_update(CarState* state, const CarParameters* params, const InputState* input, float dt);
+
+#endif // PHYSICS_ENGINE_H
