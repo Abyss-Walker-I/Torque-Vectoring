@@ -1,7 +1,11 @@
 // physics_engine.c
 
 #include "physics_engine.h"
-#include <math.h> // sinf, cosf, atan2f 등
+#include <math.h> // sinf, cosf, atan2f, fabsf, M_PI
+#include <stdio.h> 
+
+// --- 내부 헬퍼 함수 프로토타입 ---
+Vector2 v_rotate(Vector2 v, float angle);
 
 // --- 간단한 벡터/수학 헬퍼 함수 ---
 Vector2 v_rotate(Vector2 v, float angle) {
@@ -13,81 +17,114 @@ Vector2 v_rotate(Vector2 v, float angle) {
 // ----------------------------------
 
 void physics_init_parameters(CarParameters* params) {
-    // 가상의 차량 제원 (튜닝 필요)
-    params->mass = 1200.0f;  // 1200 kg
-    params->Iz = 1500.0f;    // 질량 중심 회전 관성
-    params->Lf = 1.2f;       // 앞바퀴 거리
-    params->Lr = 1.3f;       // 뒷바퀴 거리 (총 휠베이스 2.5m)
-    
-    // 단순화된 모델 파라미터
-    params->cornering_stiffness = 50000.0f; // [N/rad], 매우 중요한 튜닝값
-    params->max_motor_torque = 2000.0f; // 4바퀴 합산 토크
+    params->mass = 1200.0f;
+    params->Iz = 3000.0f;
+    params->cornering_stiffness = 100000.0f;
+    params->Lf = 1.2f;
+    params->Lr = 1.3f;
+    params->max_motor_torque = 8100.0f;
     params->wheel_radius = 0.3f;
+    params->max_grip_force = 10000.0f;
+    params->drag_constant = 15.0f;
+    
+    // [추가됨] 미끄러질 때의 마찰력은 최대 마찰력의 80%로 설정
+    params->sliding_friction_factor = 0.8f; 
 }
 
 void physics_init_state(CarState* state) {
     state->position = (Vector2){ 0.0f, 0.0f };
     state->velocity = (Vector2){ 0.0f, 0.0f };
-    state->yaw_angle = 0.0f;
+    state->yaw_angle = M_PI / 2.0f; // 위쪽(Y축 양) 방향
     state->yaw_rate = 0.0f;
 }
+
+// ##################################################################
+// ### [수정됨] 비선형 타이어 마찰 모델 계산 함수 ###
+// ##################################################################
+float calculate_non_linear_fy(float alpha, const CarParameters* params) {
+    // 1. 파라미터 정의
+    float C_stiffness = params->cornering_stiffness;
+    float F_peak = params->max_grip_force;
+    
+    // 2. 미끄러짐 마찰력 계산
+    float F_slide = F_peak * params->sliding_friction_factor;
+    
+    // 3. 최대 그립(F_peak)이 발생하는 슬립각 계산 (alpha_peak)
+    // (선형 모델에서 F_peak = C_stiffness * alpha_peak 이므로)
+    float alpha_peak = F_peak / C_stiffness;
+    
+    float Fy;
+    
+    // 4. 슬립각의 절대값으로 비교
+    float alpha_abs = fabsf(alpha);
+    float sign = (alpha > 0) ? 1.0f : -1.0f; // 힘의 방향
+
+    if (alpha_abs < alpha_peak) {
+        // A. 그립 영역 (선형 증가): Fy = C * alpha
+        Fy = -C_stiffness * alpha;
+    } else {
+        // B. 슬립 영역 (미끄러짐): Fy = F_slide
+        // (더 복잡한 모델은 여기서부터 떨어지는 곡선을 그리지만,
+        //  일정한 미끄러짐 마찰력으로 유지하는 것이 더 간단하고 안정적입니다.)
+        Fy = -F_slide * sign;
+    }
+    
+    return Fy;
+}
+// ##################################################################
+
 
 // 물리 업데이트 함수
 void physics_update(CarState* state, const CarParameters* params, const InputState* input, float dt) {
     
-    // --- 1. 차량 좌표계의 속도 계산 ---
-    // 월드 속도를 차량의 현재 방향 기준으로 변환 (v_local)
     Vector2 v_local = v_rotate(state->velocity, -state->yaw_angle);
-    float vx_local = v_local.x; // 차량의 전/후진 속도
-    float vy_local = v_local.y; // 차량의 좌/우 미끄러짐 속도
+    float vx_local = v_local.x;
+    float vy_local = v_local.y;
 
-    // --- 2. 슬립각 (Slip Angle, alpha) 계산 ---
-    // 차량이 미끄러지는 각도. 0에 가까워야 함.
-    float r = state->yaw_rate; // 현재 각속도
-    float delta = input->steering * 0.5f; // 최대 조향각 0.5 rad (약 30도) 가정
+    float r = state->yaw_rate;
+    float delta = input->steering * 0.25f; 
 
-    // 앞바퀴 슬립각
-    float alpha_f = atan2f(vy_local + params->Lf * r, vx_local) - delta;
-    // 뒷바퀴 슬립각
-    float alpha_r = atan2f(vy_local - params->Lr * r, vx_local);
+    float alpha_f, alpha_r;
+    if (fabsf(vx_local) < 0.1f) {
+        alpha_f = 0.0f; 
+        alpha_r = 0.0f;
+    } else {
+        alpha_f = atan2f(vy_local + params->Lf * r, vx_local) - delta;
+        alpha_r = atan2f(vy_local - params->Lr * r, vx_local);
+    }
 
-    // --- 3. 힘 계산 (사용자 요청 단순화 모델) ---
+    // --- 3. 힘 계산 (비선형 모델 적용) ---
+    // [수정됨] 횡력을 비선형 함수로 계산
+    float Fy_f = calculate_non_linear_fy(alpha_f, params);
+    float Fy_r = calculate_non_linear_fy(alpha_r, params);
     
-    // A. 횡방향 힘 (Fy, 코너링) - 선형 마찰 모델
-    // Fy = -C * alpha  (C: 코너링 강성)
-    // (하중 이동 무시로 Fz 계산 생략, C값 고정)
-    float Fy_f = -params->cornering_stiffness * alpha_f; // 앞바퀴 2개 합산
-    float Fy_r = -params->cornering_stiffness * alpha_r; // 뒷바퀴 2개 합산
+    // (그립 한계 로직은 이제 calculate_non_linear_fy 내부로 통합됨)
+    // if (Fy_f > params->max_grip_force) Fy_f = params->max_grip_force; ... (이전 로직 제거)
     
-    // B. 종방향 힘 (Fx, 가속/제동) - 전기 모터 모델
-    // (기어 변속, 저항 무시)
-    float Fx_total = (input->throttle * params->max_motor_torque) / params->wheel_radius;
+    // (후륜구동 RWD 가정)
+    float Fx_f_motor = 0.0f; 
+    float Fx_r_motor = (input->throttle * params->max_motor_torque) / params->wheel_radius;
     
-    // --- 4. 총 힘/모멘트 계산 (차량 좌표계 기준) ---
-    // (앞바퀴 조향각 delta로 인한 힘의 좌표 변환)
-    float F_total_local_x = Fx_total * cosf(delta) - Fy_f * sinf(delta);
-    float F_total_local_y = Fx_total * sinf(delta) + Fy_f * cosf(delta) + Fy_r;
-    
-    float M_total_z = Fy_f * params->Lf * cosf(delta) - Fy_r * params->Lr;
-    // (단순화를 위해 Fx로 인한 토크 벡터링 효과는 무시)
+    float Fx_drag = -params->drag_constant * vx_local;
+    float Fy_drag = -params->drag_constant * vy_local;
 
-    // --- 5. 가속도 계산 (뉴턴의 제2법칙) ---
-    // a = F / m
+    float cos_d = cosf(delta);
+    float sin_d = sinf(delta);
+    
+    float F_total_local_x = (Fx_f_motor * cos_d - Fy_f * sin_d) + Fx_r_motor + Fx_drag;
+    float F_total_local_y = (Fx_f_motor * sin_d + Fy_f * cos_d) + Fy_r + Fy_drag;
+    float M_total_z = ( (Fx_f_motor * sin_d + Fy_f * cos_d) * params->Lf ) - ( Fy_r * params->Lr );
+
     Vector2 a_local = { F_total_local_x / params->mass, F_total_local_y / params->mass };
     float angular_accel = M_total_z / params->Iz;
 
-    // --- 6. 상태 적분 (Euler Integration) ---
-    
-    // A. 가속도를 다시 월드 좌표계로 변환
     Vector2 a_world = v_rotate(a_local, state->yaw_angle);
     
-    // B. 속도 및 위치 업데이트 (월드 기준)
     state->velocity.x += a_world.x * dt;
     state->velocity.y += a_world.y * dt;
     state->position.x += state->velocity.x * dt;
     state->position.y += state->velocity.y * dt;
     
-    // C. 각속도 및 각도 업데이트
     state->yaw_rate += angular_accel * dt;
     state->yaw_angle += state->yaw_rate * dt;
 }
