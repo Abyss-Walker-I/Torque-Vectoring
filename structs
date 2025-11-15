@@ -1,0 +1,49 @@
+// physics_structs.h
+
+#ifndef PHYSICS_STRUCTS_H
+#define PHYSICS_STRUCTS_H
+
+// 2D 벡터 (위치, 속도, 힘 등)
+typedef struct {
+    float x;
+    float y;
+} Vector2;
+
+// 차량의 불변 제원 (사용자가 단순화 요청)
+typedef struct {
+    float mass;           // 차량 총 질량 [kg]
+    float Iz;             // Z축 기준 관성 모멘트 (회전 저항) [kg*m^2]
+    
+    // 차량 크기
+    float Lf;             // 질량 중심(COM)에서 앞바퀴 축까지의 거리 [m]
+    float Lr;             // 질량 중심(COM)에서 뒷바퀴 축까지의 거리 [m]
+    
+    // 단순화된 모델 파라미터
+    float cornering_stiffness; // 코너링 강성 [N/rad]. 선형 마찰 모델의 핵심.
+    float max_motor_torque;    // 모터의 최대 토크 [N*m]
+    float wheel_radius;        // 바퀴 반경 [m]
+    
+} CarParameters;
+
+// 차량의 실시간 상태
+typedef struct {
+    // ---------------------------------------------------------------
+    // 참고: 이 값들은 "월드(배경) 좌표계" 기준입니다.
+    // 차량이 고정된 것처럼 보이는 것은 "렌더링" 단계에서 처리합니다.
+    // ---------------------------------------------------------------
+    
+    Vector2 position;     // 월드 상의 차량 위치 (x, y)
+    Vector2 velocity;     // 월드 상의 차량 속도 (vx, vy)
+    
+    float yaw_angle;      // 차량의 현재 방향 각도 (0 = 동쪽) [rad]
+    float yaw_rate;       // 차량의 각속도 (회전 속도) [rad/s]
+    
+} CarState;
+
+// 사용자의 입력 상태
+typedef struct {
+    float throttle;       // 가속 페달 (-1.0: 후진, 0.0: 중립, 1.0: 전진)
+    float steering;       // 조향 (-1.0: 좌회전, 0.0: 직진, 1.0: 우회전)
+} InputState;
+
+#endif // PHYSICS_STRUCTS_H
