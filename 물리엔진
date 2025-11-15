@@ -1,1 +1,140 @@
+// main.c
 
+#include <stdio.h>
+#include <SDL2/SDL.h>
+#include "physics_engine.h" // 우리가 만든 헤더
+
+// --- SDL 및 화면 설정 ---
+#define SCREEN_WIDTH 800
+#define SCREEN_HEIGHT 600
+
+SDL_Window* g_window = NULL;
+SDL_Renderer* g_renderer = NULL;
+
+// --- 월드 객체 (배경) ---
+// 테스트를 위해 월드에 점(나무) 100개를 만듭니다.
+#define NUM_TREES 100
+Vector2 g_trees[NUM_TREES];
+
+// --- 헬퍼 함수: 월드 좌표 -> 화면 좌표 ---
+// "고정된 차, 움직이는 배경"의 핵심 로직
+Vector2 world_to_screen(Vector2 world_pos, CarState* car) {
+    // 1. 월드 좌표를 차량 중심의 상대 좌표로 변환
+    Vector2 rel_pos = { world_pos.x - car->position.x, world_pos.y - car->position.y };
+    
+    // 2. 차량의 각도(yaw_angle)의 반대 방향으로 회전
+    float s = sinf(-car->yaw_angle);
+    float c = cosf(-car->yaw_angle);
+    Vector2 rotated_pos = { rel_pos.x * c - rel_pos.y * s, rel_pos.x * s + rel_pos.y * c };
+    
+    // 3. 화면 중앙(차량의 고정 위치) 기준으로 오프셋
+    return (Vector2){ rotated_pos.x + SCREEN_WIDTH / 2.0f, 
+                      rotated_pos.y + SCREEN_HEIGHT / 2.0f };
+}
+
+// --- SDL 초기화 ---
+int init_sdl() {
+    if (SDL_Init(SDL_INIT_VIDEO) < 0) return 0;
+    g_window = SDL_CreateWindow("Fixed Car, Moving World", SDL_WINDOWPOS_UNDEFINED, 
+                                SDL_WINDOWPOS_UNDEFINED, SCREEN_WIDTH, SCREEN_HEIGHT, 0);
+    if (!g_window) return 0;
+    g_renderer = SDL_CreateRenderer(g_window, -1, SDL_RENDERER_ACCELERATED);
+    if (!g_renderer) return 0;
+    
+    // 월드(나무) 랜덤 생성
+    for (int i = 0; i < NUM_TREES; i++) {
+        g_trees[i] = (Vector2){ (float)(rand() % 4000 - 2000), 
+                                (float)(rand() % 4000 - 2000) };
+    }
+    return 1;
+}
+
+// --- 입력 처리 ---
+void handle_input(InputState* input, int* running) {
+    SDL_Event e;
+    while (SDL_PollEvent(&e)) {
+        if (e.type == SDL_QUIT) *running = 0;
+    }
+    
+    const Uint8* keystate = SDL_GetKeyboardState(NULL);
+    
+    // 스로틀
+    input->throttle = 0.0f;
+    if (keystate[SDL_SCANCODE_UP]) input->throttle = 1.0f;
+    if (keystate[SDL_SCANCODE_DOWN]) input->throttle = -1.0f;
+    
+    // 스티어링
+    input->steering = 0.0f;
+    if (keystate[SDL_SCANCODE_LEFT]) input->steering = -1.0f;
+    if (keystate[SDL_SCANCODE_RIGHT]) input->steering = 1.0f;
+}
+
+// --- 렌더링 ---
+void render(CarState* car) {
+    // 1. 화면 클리어 (검은색)
+    SDL_SetRenderDrawColor(g_renderer, 0, 0, 0, 255);
+    SDL_RenderClear(g_renderer);
+
+    // 2. 배경(나무) 그리기 (초록색 점)
+    SDL_SetRenderDrawColor(g_renderer, 0, 150, 0, 255);
+    for (int i = 0; i < NUM_TREES; i++) {
+        Vector2 screen_pos = world_to_screen(g_trees[i], car);
+        // 화면 밖에 있는 건 그리지 않음
+        if (screen_pos.x < 0 || screen_pos.x > SCREEN_WIDTH || 
+            screen_pos.y < 0 || screen_pos.y > SCREEN_HEIGHT) continue;
+            
+        SDL_Rect tree_rect = { (int)screen_pos.x - 2, (int)screen_pos.y - 2, 4, 4 };
+        SDL_RenderFillRect(g_renderer, &tree_rect);
+    }
+
+    // 3. 차량 그리기 (항상 화면 중앙에, 회전 없이!)
+    SDL_Rect car_rect = { SCREEN_WIDTH / 2 - 10, SCREEN_HEIGHT / 2 - 20, 20, 40 };
+    SDL_SetRenderDrawColor(g_renderer, 255, 0, 0, 255);
+    SDL_RenderFillRect(g_renderer, &car_rect);
+
+    // 4. 화면 표시
+    SDL_RenderPresent(g_renderer);
+}
+
+// --- 메인 함수 ---
+int main(int argc, char* argv[]) {
+    if (!init_sdl()) {
+        printf("SDL 초기화 실패!\n");
+        return -1;
+    }
+
+    CarParameters params;
+    CarState state;
+    InputState input = {0};
+    
+    physics_init_parameters(&params);
+    physics_init_state(&state);
+    
+    int running = 1;
+    Uint32 last_tick = SDL_GetTicks();
+
+    while (running) {
+        // 1. 입력 처리
+        handle_input(&input, &running);
+        
+        // 2. 시간 계산 (Delta Time)
+        Uint32 current_tick = SDL_GetTicks();
+        float dt = (current_tick - last_tick) / 1000.0f; // 초 단위
+        last_tick = current_tick;
+        
+        // 3. 물리 엔진 업데이트
+        physics_update(&state, &params, &input, dt);
+        
+        // 4. 렌더링
+        render(&state);
+        
+        // 프레임 제한 (약 60FPS)
+        SDL_Delay(16);
+    }
+
+    // 종료
+    SDL_DestroyRenderer(g_renderer);
+    SDL_DestroyWindow(g_window);
+    SDL_Quit();
+    return 0;
+}
