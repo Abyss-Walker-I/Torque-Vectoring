@@ -3,7 +3,9 @@
 #ifndef PHYSICS_ENGINE_H
 #define PHYSICS_ENGINE_H
 
-#include "physics_structs.h"
+#include "physics_structs.h" // 물리 구조체 정의를 먼저 포함
+
+// --- 공개 함수 프로토타입 ---
 
 // 차량 제원을 합리적인 기본값으로 초기화합니다.
 void physics_init_parameters(CarParameters* params);
